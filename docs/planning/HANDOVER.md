@@ -54,14 +54,14 @@ config file (ADR-0013) with the noted defaults.
 |---|---|---|
 | Valuation window | 15 days, median of daily `average`, IQR shown | ADR-0004 |
 | Demand cutoff — relative share | ~20% of daily traded volume | ADR-0007 |
-| Demand cutoff — absolute floor | **undecided** (units/day) | ADR-0007 |
-| Demand cutoff — minimum days of history | **undecided** | ADR-0007 |
+| Demand cutoff — absolute floor | 10 units/day | ADR-0007 |
+| Demand cutoff — minimum days of history | 15 (the full window) | ADR-0007 |
 | ESI concurrency ceiling | 15, hard | ADR-0011 |
-| Error-budget safety floor | **undecided** | ADR-0011 |
+| Error-budget safety floor | 50 of 100 | ADR-0011 |
 | SCC surcharge | 4% (volatile — see G10) | ADR-0013 |
 | Facility tax (NPC station) | 0.25% | research §5.4 |
 
-The three undecided ones are genuinely open and should be picked during implementation, not guessed at now.
+Undecided values are genuinely open and should be picked deliberately, not guessed at.
 
 ## The formulas, in brief
 
@@ -113,10 +113,11 @@ Static data comes from Fuzzwork's prebuilt SQLite SDE dump.
      term; the 2016 PDF says there is one.
    - **G10** — tax rates have changed four times since 2023. Treat as configuration and re-check.
    - **G3** — the wormhole security multiplier is unconfirmed (community assumes the nullsec 2.1).
-2. **Decide the three undecided config defaults** above.
-3. **Read per-blueprint values from the SDE rather than hardcoding category defaults** — invention run
+2. ~~Decide the three undecided config defaults.~~ **Done 2026-09-18** — all three settled and recorded in their ADRs.
+3. **Verify one ESI fact that changes a filter's meaning**: does `/markets/{region_id}/history/` return rows only for days that traded, or also zero-volume days? If the former, ADR-0007's minimum-days threshold doubles as a sporadicity filter; if the latter, it is purely a data-sufficiency check.
+4. **Read per-blueprint values from the SDE rather than hardcoding category defaults** — invention run
    counts especially (research G6), and the Standup rig attribute set (G13).
-4. **Start implementation.** ADR-0012 constrains the shape: cost model and scan-result layer return plain
+5. **Start implementation.** ADR-0012 constrains the shape: cost model and scan-result layer return plain
    dataclasses, templates only render them — no domain arithmetic in a template, no ORM objects in the view.
    That seam is what keeps an SPA swap cheap later.
 
