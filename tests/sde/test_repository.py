@@ -8,7 +8,7 @@ import pytest
 from tech2finder.sde.importer import import_sde
 from tech2finder.sde.repository import (
     decryptors,
-    invention_targets,
+    invention_paths,
     manufacturing_materials,
     market_groups,
     rig_bonuses,
@@ -50,7 +50,7 @@ def test_the_scan_universe_is_invention_reachable_items_in_the_chosen_groups(
     store: Path,
 ) -> None:
     with connect(store) as conn:
-        targets = invention_targets(conn, market_group_ids=[1000])
+        targets = invention_paths(conn, market_group_ids=[1000])
 
     assert len(targets) == 1
     target = targets[0]
@@ -62,7 +62,7 @@ def test_the_scan_universe_is_invention_reachable_items_in_the_chosen_groups(
 
 def test_a_target_carries_the_bpc_run_count_read_from_its_own_blueprint(store: Path) -> None:
     with connect(store) as conn:
-        target = invention_targets(conn, market_group_ids=[1000])[0]
+        target = invention_paths(conn, market_group_ids=[1000])[0]
 
     # One run, because it is a rig — read from the blueprint, not assumed from
     # the category default of ten that modules get.
@@ -72,7 +72,7 @@ def test_a_target_carries_the_bpc_run_count_read_from_its_own_blueprint(store: P
 
 def test_a_target_carries_its_invention_inputs_and_durations(store: Path) -> None:
     with connect(store) as conn:
-        target = invention_targets(conn, market_group_ids=[1000])[0]
+        target = invention_paths(conn, market_group_ids=[1000])[0]
 
     assert target.invention_seconds == 10800
     assert target.manufacturing_seconds == 1200
@@ -84,12 +84,12 @@ def test_selecting_a_parent_market_group_includes_its_children(store: Path) -> N
     # The user picks from the in-game tree, where choosing a branch means the
     # branch, not just the node.
     with connect(store) as conn:
-        assert len(invention_targets(conn, market_group_ids=[1001])) == 1
+        assert len(invention_paths(conn, market_group_ids=[1001])) == 1
 
 
 def test_an_unrelated_market_group_yields_nothing(store: Path) -> None:
     with connect(store) as conn:
-        assert invention_targets(conn, market_group_ids=[2000]) == ()
+        assert invention_paths(conn, market_group_ids=[2000]) == ()
 
 
 def test_lists_manufacturing_materials_at_their_published_quantities(store: Path) -> None:
@@ -144,3 +144,38 @@ def test_a_material_whose_type_row_is_missing_is_still_returned(
         (25625, 3),
     ]
     assert next(m for m in materials if m.type_id == 25617).name == "type 25617"
+
+
+def test_rig_bonuses_are_hashable_and_immutable(store: Path) -> None:
+    with connect(store) as conn:
+        bonus = rig_bonuses(conn, 37146)
+
+    assert {bonus}  # a frozen value should be usable as a key
+    with pytest.raises(AttributeError):
+        bonus.highsec = 99.0  # type: ignore[misc]
+
+
+def test_a_decryptor_missing_a_modifier_is_skipped_not_fatal(store: Path) -> None:
+    # Enumerating the group means a future decryptor appears automatically; one
+    # malformed row must not take the whole list down with it.
+    with connect(store) as conn:
+        conn.execute(
+            "INSERT INTO sde_type (type_id, name, group_id, portion_size, published) "
+            "VALUES (99999, 'Half-Published Decryptor', 1304, 1, 1)"
+        )
+        conn.execute("INSERT INTO sde_type_attribute VALUES (99999, 1112, 1.5)")  # probability only
+
+    with connect(store) as conn:
+        found = decryptors(conn)
+
+    assert [d.type_id for d in found] == [ACCELERANT]
+
+
+def test_an_invention_path_without_a_published_probability_is_dropped(store: Path) -> None:
+    # Expected blueprint cost divides by the chance, so a path without one
+    # cannot be costed; a NULL reaching the cost model would fail far from here.
+    with connect(store) as conn:
+        conn.execute("DELETE FROM sde_invention_probability")
+
+    with connect(store) as conn:
+        assert invention_paths(conn, [1000]) == ()

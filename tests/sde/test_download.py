@@ -83,3 +83,32 @@ async def test_reports_an_http_failure_rather_than_writing_the_body(tmp_path: Pa
 
     with pytest.raises(OSError, match="503"):
         await ensure_dump(tmp_path, transport)
+
+
+async def test_leaves_no_partial_file_behind_when_decompression_fails(tmp_path: Path) -> None:
+    body = b"not actually gzip"
+    md5 = Response(
+        status=200,
+        headers={},
+        body=f"{hashlib.md5(body).hexdigest()}  /path.gz".encode(),  # noqa: S324
+    )
+    transport = FakeTransport(responses=[md5, Response(status=200, headers={}, body=body)])
+
+    with pytest.raises(OSError):
+        await ensure_dump(tmp_path, transport)
+
+    assert list(tmp_path.glob("*.partial")) == []
+
+
+async def test_downloads_again_when_the_local_dump_has_been_truncated(tmp_path: Path) -> None:
+    # A dump truncated by a full disk keeps a matching sidecar, and would
+    # otherwise be trusted forever.
+    md5, dump, _ = published(b"a pretend sqlite file")
+    result = await ensure_dump(tmp_path, FakeTransport(responses=[md5, dump]))
+    result.path.write_bytes(b"trunc")
+
+    md5_again, dump_again, _ = published(b"a pretend sqlite file")
+    second = await ensure_dump(tmp_path, FakeTransport(responses=[md5_again, dump_again]))
+
+    assert second.downloaded is True
+    assert second.path.read_bytes() == b"a pretend sqlite file"

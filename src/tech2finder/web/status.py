@@ -11,12 +11,8 @@ Reads only. Bringing the schema up to date is a startup concern — see
 from dataclasses import dataclass
 from pathlib import Path
 
+from tech2finder.store.bootstrap import SDE_MD5
 from tech2finder.store.connection import connect
-
-#: Key under which the SDE import records the dump's md5sum. Fuzzwork publishes
-#: a checksum alongside the dump, so a later import can ask "has the SDE
-#: changed?" for a few bytes rather than re-downloading 136 MB.
-SDE_MD5 = "sde_md5"
 
 
 @dataclass(frozen=True)

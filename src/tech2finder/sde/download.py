@@ -11,6 +11,8 @@ root-level symlinks below are.
 
 import gzip
 import hashlib
+import io
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +23,8 @@ DUMP_URL = f"{BASE}/latest-sqlite.db.gz"
 MD5_URL = f"{DUMP_URL}.md5sum"
 
 DUMP_NAME = "sde.db"
+#: Records the published digest and the decompressed size, so a dump truncated
+#: after the fact is not trusted merely because the sidecar still matches.
 FINGERPRINT_NAME = "sde.db.md5"
 
 
@@ -43,7 +47,7 @@ async def ensure_dump(directory: Path, transport: Transport) -> Dump:
     if (
         dump.is_file()
         and fingerprint_file.is_file()
-        and fingerprint_file.read_text().strip() == published
+        and _is_current(fingerprint_file, dump, published)
     ):
         return Dump(path=dump, fingerprint=published, downloaded=False)
 
@@ -58,13 +62,33 @@ async def ensure_dump(directory: Path, transport: Transport) -> Dump:
         )
 
     # Decompress beside the target and move into place, so an interrupted run
-    # never leaves a half-written dump that looks complete.
+    # never leaves a half-written dump that looks complete. Streamed rather than
+    # decompressed whole: the dump is ~500 MB expanded, and holding that plus
+    # the 136 MB body would be a MemoryError on a small container.
     staging = directory / f"{DUMP_NAME}.partial"
-    staging.write_bytes(gzip.decompress(compressed))
-    staging.replace(dump)
-    fingerprint_file.write_text(published)
+    try:
+        with (
+            gzip.GzipFile(fileobj=io.BytesIO(compressed)) as source,
+            staging.open("wb") as target,
+        ):
+            shutil.copyfileobj(source, target)
+        staging.replace(dump)
+    finally:
+        staging.unlink(missing_ok=True)
+
+    fingerprint_file.write_text(f"{published}\n{dump.stat().st_size}\n")
 
     return Dump(path=dump, fingerprint=published, downloaded=True)
+
+
+def _is_current(fingerprint_file: Path, dump: Path, published: str) -> bool:
+    """Whether the local dump is the published one *and* is still intact."""
+    recorded = fingerprint_file.read_text().split()
+    if not recorded or recorded[0] != published:
+        return False
+    # A dump truncated by a full disk or a killed process keeps a matching
+    # sidecar, and would otherwise be trusted forever.
+    return len(recorded) > 1 and recorded[1].isdigit() and dump.stat().st_size == int(recorded[1])
 
 
 async def _get(transport: Transport, url: str) -> bytes:

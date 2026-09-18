@@ -14,11 +14,15 @@ from pathlib import Path
 import pytest
 
 from tech2finder.sde.importer import import_sde
-from tech2finder.sde.repository import decryptors, invention_targets, manufacturing_materials
+from tech2finder.sde.repository import decryptors, invention_paths, manufacturing_materials
 from tech2finder.store.bootstrap import bootstrap
 from tech2finder.store.connection import connect
 
-DUMP = Path(os.environ.get("TECH2FINDER_SDE", "data/sde/sde.db"))
+#: Anchored to the repository root, not the process cwd: a relative default
+#: means running pytest from a subdirectory silently skips this whole file —
+#: the one file that would catch CCP reshaping the data under us.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DUMP = Path(os.environ.get("TECH2FINDER_SDE", REPO_ROOT / "data" / "sde" / "sde.db"))
 
 pytestmark = pytest.mark.skipif(
     not DUMP.is_file(), reason=f"no SDE dump at {DUMP}; run `python -m tech2finder.sde`"
@@ -31,6 +35,8 @@ T2_BLUEPRINT = 31797
 SHIELD_RIG_MARKET_GROUP = 965
 #: "Rigs", one level higher again.
 ALL_RIGS_MARKET_GROUP = 1111
+#: The whole branch, which contains T3 subsystems and their multiple paths.
+SHIP_AND_MODULE_MODIFICATIONS = 955
 
 
 @pytest.fixture(scope="module")
@@ -93,7 +99,7 @@ def test_all_eight_decryptors_carry_the_verified_modifiers(store: Path) -> None:
 
 def test_rigs_invent_at_one_run_per_bpc_and_two_datacores_of_each_type(store: Path) -> None:
     with connect(store) as conn:
-        targets = invention_targets(conn, [SHIELD_RIG_MARKET_GROUP])
+        targets = invention_paths(conn, [SHIELD_RIG_MARKET_GROUP])
 
     target = next(t for t in targets if t.product_type_id == MEDIUM_CORE_DEFENSE_FIELD_EXTENDER_II)
 
@@ -106,8 +112,8 @@ def test_selecting_a_branch_pulls_in_its_children(store: Path) -> None:
     # The item sits in Medium Shield Rigs, two levels below Rigs. Picking a
     # branch in the in-game tree has to mean the branch, not just the node.
     with connect(store) as conn:
-        shield = invention_targets(conn, [SHIELD_RIG_MARKET_GROUP])
-        every_rig = invention_targets(conn, [ALL_RIGS_MARKET_GROUP])
+        shield = invention_paths(conn, [SHIELD_RIG_MARKET_GROUP])
+        every_rig = invention_paths(conn, [ALL_RIGS_MARKET_GROUP])
 
     assert len(shield) > 5
     assert len(every_rig) > len(shield)
@@ -117,6 +123,25 @@ def test_selecting_a_branch_pulls_in_its_children(store: Path) -> None:
 def test_every_rig_in_the_branch_inverts_at_one_run(store: Path) -> None:
     # The fact that makes invention the binding pipeline for this category.
     with connect(store) as conn:
-        targets = invention_targets(conn, [ALL_RIGS_MARKET_GROUP])
+        targets = invention_paths(conn, [ALL_RIGS_MARKET_GROUP])
 
     assert {t.runs_per_bpc for t in targets} == {1}
+
+
+def test_a_product_can_have_several_disagreeing_invention_paths(store: Path) -> None:
+    # 48 products in the current SDE are invented from more than one source,
+    # and every one of them differs in probability and run count — T3
+    # subsystems from intact, malfunctioning and wrecked relics. A caller that
+    # keyed by product would silently pick one at random, which is why a row is
+    # a path rather than a target.
+    with connect(store) as conn:
+        paths = invention_paths(conn, [SHIP_AND_MODULE_MODIFICATIONS])
+
+    by_product: dict[int, set[tuple[float, int]]] = {}
+    for path in paths:
+        by_product.setdefault(path.product_type_id, set()).add(
+            (path.base_probability, path.runs_per_bpc)
+        )
+
+    disagreeing = {p: v for p, v in by_product.items() if len(v) > 1}
+    assert disagreeing, "expected at least one product with differing paths"

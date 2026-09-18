@@ -58,17 +58,34 @@ class RigBonuses:
     material_bonus: float
     time_bonus: float
     cost_bonus: float
-    multipliers: dict[str, float]
+    #: One field per band rather than a dict: a mutable field on a frozen
+    #: dataclass is both unhashable and quietly mutable, which are the two
+    #: things frozen exists to prevent.
+    highsec: float
+    lowsec: float
+    nullsec: float
 
     def security_multiplier(self, band: str) -> float:
-        return self.multipliers[band]
+        try:
+            value = getattr(self, band)
+        except AttributeError:
+            raise KeyError(band) from None
+        return float(value)
 
 
 @dataclass(frozen=True)
-class InventionTarget:
-    """One invention-reachable item: the whole chain, in one row.
+class InventionPath:
+    """One way of inventing one item: the whole chain, in one row.
 
     T1 blueprint --invent--> T2 blueprint --manufacture--> the item.
+
+    A product can have **several paths**, and they do not agree. In the current
+    SDE 48 products are invented from more than one source blueprint, and every
+    one of those differs in probability and run count — T3 subsystems from
+    intact, malfunctioning and wrecked relics run 0.26/20, 0.21/10 and 0.14/3
+    respectively. So this is deliberately not keyed by product: choosing among
+    paths is a decision for the scan engine, in the same way choosing a
+    decryptor is, and collapsing them here would silently pick one at random.
     """
 
     t1_blueprint_id: int
@@ -101,16 +118,21 @@ def decryptors(conn: sqlite3.Connection) -> tuple[Decryptor, ...]:
         (PROBABILITY_MULTIPLIER, MAX_RUN_MODIFIER, ME_MODIFIER, TE_MODIFIER, DECRYPTOR_GROUP),
     ).fetchall()
 
+    # A decryptor missing any of the four modifiers is skipped rather than
+    # allowed to raise: the point of enumerating the group is that a new one
+    # CCP publishes is picked up automatically, and one malformed row should
+    # not take the whole list down with it.
     return tuple(
         Decryptor(
             type_id=r["type_id"],
             name=r["name"],
-            probability_multiplier=r["probability"],
+            probability_multiplier=float(r["probability"]),
             run_modifier=int(r["runs"]),
             me_modifier=int(r["me"]),
             te_modifier=int(r["te"]),
         )
         for r in rows
+        if None not in (r["probability"], r["runs"], r["me"], r["te"])
     )
 
 
@@ -135,7 +157,9 @@ def rig_bonuses(conn: sqlite3.Connection, type_id: int) -> RigBonuses:
         cost_bonus=values.get(RIG_COST_BONUS, 0.0),
         # A rig with no multipliers is a highsec-only structure rig; 1.0 is then
         # the correct scaling everywhere rather than a missing value.
-        multipliers={band: values.get(attr, 1.0) for band, attr in SECURITY_MULTIPLIER.items()},
+        highsec=values.get(SECURITY_MULTIPLIER["highsec"], 1.0),
+        lowsec=values.get(SECURITY_MULTIPLIER["lowsec"], 1.0),
+        nullsec=values.get(SECURITY_MULTIPLIER["nullsec"], 1.0),
     )
 
 
@@ -143,10 +167,14 @@ def manufacturing_materials(conn: sqlite3.Connection, blueprint_id: int) -> tupl
     return _materials(conn, blueprint_id, MANUFACTURING)
 
 
-def invention_targets(
+def invention_paths(
     conn: sqlite3.Connection, market_group_ids: Iterable[int]
-) -> tuple[InventionTarget, ...]:
-    """Every invention-reachable item whose market group is in, or under, the given ones."""
+) -> tuple[InventionPath, ...]:
+    """Every way of inventing an item whose market group is in, or under, the given ones.
+
+    One row per (source blueprint, product) pair, so a product with several
+    sources appears several times. See `InventionPath`.
+    """
     wanted = list(market_group_ids)
     if not wanted:
         return ()
@@ -175,7 +203,12 @@ def invention_targets(
           ON built.blueprint_id = invented.product_type_id AND built.activity_id = ?
         JOIN sde_type item ON item.type_id = built.product_type_id
         JOIN branch ON branch.market_group_id = item.market_group_id
-        LEFT JOIN sde_invention_probability p
+        -- Inner, deliberately: expected blueprint cost divides by the
+        -- invention chance, so a path without a published probability cannot
+        -- be costed at all. Eight such rows exist in the current SDE, all
+        -- structure modules. Dropping them here is better than letting a NULL
+        -- reach the cost model and fail far from its cause.
+        JOIN sde_invention_probability p
           ON p.blueprint_id = invented.blueprint_id
          AND p.product_type_id = invented.product_type_id
         LEFT JOIN sde_activity_time it
@@ -190,8 +223,10 @@ def invention_targets(
         (*wanted, MANUFACTURING, INVENTION, MANUFACTURING, INVENTION),
     ).fetchall()
 
+    datacores = _materials_for(conn, {r["t1_blueprint_id"] for r in rows}, INVENTION)
+
     return tuple(
-        InventionTarget(
+        InventionPath(
             t1_blueprint_id=r["t1_blueprint_id"],
             t2_blueprint_id=r["t2_blueprint_id"],
             product_type_id=r["product_type_id"],
@@ -200,10 +235,39 @@ def invention_targets(
             base_probability=r["base_probability"],
             invention_seconds=r["invention_seconds"],
             manufacturing_seconds=r["manufacturing_seconds"],
-            datacores=_materials(conn, r["t1_blueprint_id"], INVENTION),
+            datacores=datacores.get(r["t1_blueprint_id"], ()),
         )
         for r in rows
     )
+
+
+def _materials_for(
+    conn: sqlite3.Connection, blueprint_ids: set[int], activity: int
+) -> dict[int, tuple[Material, ...]]:
+    """Materials for many blueprints at once, to avoid a query per result row."""
+    if not blueprint_ids:
+        return {}
+
+    placeholders = ", ".join("?" for _ in blueprint_ids)
+    rows = conn.execute(
+        f"""
+        SELECT m.blueprint_id, m.material_type_id, t.name, m.quantity
+        FROM sde_activity_material m
+        LEFT JOIN sde_type t ON t.type_id = m.material_type_id
+        WHERE m.activity_id = ? AND m.blueprint_id IN ({placeholders})
+        ORDER BY m.blueprint_id, m.material_type_id
+        """,
+        (activity, *blueprint_ids),
+    ).fetchall()
+
+    grouped: dict[int, list[Material]] = {}
+    for r in rows:
+        grouped.setdefault(r["blueprint_id"], []).append(
+            Material(
+                r["material_type_id"], r["name"] or f"type {r['material_type_id']}", r["quantity"]
+            )
+        )
+    return {key: tuple(value) for key, value in grouped.items()}
 
 
 def _materials(conn: sqlite3.Connection, blueprint_id: int, activity: int) -> tuple[Material, ...]:

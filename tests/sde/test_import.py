@@ -180,3 +180,27 @@ def test_the_manufactured_item_is_reachable_from_the_t1_blueprint(store: Path, d
 
     assert row["item_id"] == T2_RIG
     assert row["name"] == "Medium Core Defense Field Extender II"
+
+
+def test_an_import_without_a_fingerprint_clears_a_stale_one(store: Path, dump: Path) -> None:
+    # Otherwise the status page keeps claiming an SDE that is no longer the one
+    # in the store.
+    with connect(store) as conn:
+        import_sde(conn, dump, fingerprint="de0092efcdcaf701ecfe1b6522ab963c")
+    with connect(store) as conn:
+        import_sde(conn, dump)
+
+    assert store_status(store).sde_md5 is None
+
+
+def test_accepts_a_dump_whose_path_contains_uri_punctuation(store: Path, tmp_path: Path) -> None:
+    # Opened as a file: URI, '#' would be read as a fragment and silently open a
+    # different, empty database — rejecting a perfectly good dump.
+    awkward = tmp_path / "cache#1"
+    awkward.mkdir()
+    build(awkward / "sde.db")
+
+    with connect(store) as conn:
+        summary = import_sde(conn, awkward / "sde.db")
+
+    assert summary.total > 0

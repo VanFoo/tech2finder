@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from tech2finder.web.status import SDE_MD5
+from tech2finder.store.bootstrap import SDE_MD5
 
 #: Tables the import needs to find in a dump before it will trust it.
 REQUIRED = (
@@ -95,7 +95,11 @@ def import_sde(
             conn.execute(f"INSERT OR REPLACE INTO {table} {select}")
             counts[table] = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
 
-        if fingerprint is not None:
+        if fingerprint is None:
+            # Leaving a previous dump's fingerprint in place would have the
+            # status page claim an SDE that is no longer the one in the store.
+            conn.execute("DELETE FROM meta WHERE key = ?", (SDE_MD5,))
+        else:
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES (?, ?) "
                 "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -115,8 +119,12 @@ def import_sde(
 
 def _reject_unless_it_looks_like_an_sde(dump_path: Path) -> None:
     """Fail before touching the store, so a wrong file cannot empty it."""
-    probe = sqlite3.connect(f"file:{dump_path}?mode=ro", uri=True)
+    # Opened by path, not as a file: URI, because a path containing '#' or '?'
+    # would be parsed as a URI fragment or query and silently open a different,
+    # empty database — reporting a perfectly good dump as invalid.
+    probe = sqlite3.connect(dump_path)
     try:
+        probe.execute("PRAGMA query_only = ON")
         present = {row[0] for row in probe.execute("SELECT name FROM sqlite_master")}
     finally:
         probe.close()
