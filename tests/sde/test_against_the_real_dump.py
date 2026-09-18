@@ -37,6 +37,10 @@ SHIELD_RIG_MARKET_GROUP = 965
 ALL_RIGS_MARKET_GROUP = 1111
 #: The whole branch, which contains T3 subsystems and their multiple paths.
 SHIP_AND_MODULE_MODIFICATIONS = 955
+#: Where the Hawk and the Harpy live, both invented from a Merlin blueprint.
+#: "Assault Frigates". Note there are two market groups with this name; the
+#: Hawk and Harpy sit under this one, via its Caldari child (434).
+ASSAULT_FRIGATES = 432
 
 
 @pytest.fixture(scope="module")
@@ -145,3 +149,23 @@ def test_a_product_can_have_several_disagreeing_invention_paths(store: Path) -> 
 
     disagreeing = {p: v for p, v in by_product.items() if len(v) > 1}
     assert disagreeing, "expected at least one product with differing paths"
+
+
+def test_one_source_blueprint_can_invent_several_different_products(store: Path) -> None:
+    # The mirror of the many-sources case above: a Merlin blueprint invents
+    # either a Hawk or a Harpy. 74 of 1113 source blueprints invent more than
+    # one product, up to 16 from one, so neither end of the relationship is
+    # safe to key by.
+    with connect(store) as conn:
+        merlin = conn.execute(
+            "SELECT type_id FROM sde_type WHERE name = 'Merlin Blueprint'"
+        ).fetchone()["type_id"]
+        paths = invention_paths(conn, [ASSAULT_FRIGATES])
+
+    from_merlin = {p.product_name: p for p in paths if p.t1_blueprint_id == merlin}
+
+    assert set(from_merlin) == {"Hawk", "Harpy"}
+    # Same hull, same datacores, same odds — they differ downstream, in what the
+    # T2 item costs to build and what the market pays for it.
+    assert sorted(p.base_probability for p in from_merlin.values()) == pytest.approx([0.3, 0.3])
+    assert {p.runs_per_bpc for p in from_merlin.values()} == {1}

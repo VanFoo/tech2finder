@@ -79,13 +79,19 @@ class InventionPath:
 
     T1 blueprint --invent--> T2 blueprint --manufacture--> the item.
 
-    A product can have **several paths**, and they do not agree. In the current
-    SDE 48 products are invented from more than one source blueprint, and every
-    one of those differs in probability and run count — T3 subsystems from
-    intact, malfunctioning and wrecked relics run 0.26/20, 0.21/10 and 0.14/3
-    respectively. So this is deliberately not keyed by product: choosing among
-    paths is a decision for the scan engine, in the same way choosing a
-    decryptor is, and collapsing them here would silently pick one at random.
+    The relationship is many-to-many in **both** directions, which is why a row
+    is a (source, product) pair and not keyed by either end:
+
+    - **Several sources per product**, disagreeing. 48 products in the current
+      SDE are invented from more than one source blueprint, and every one of
+      those differs in probability and run count — T3 subsystems from intact,
+      malfunctioning and wrecked relics run 0.26/20, 0.21/10 and 0.14/3.
+    - **Several products per source.** 74 of 1113 source blueprints invent more
+      than one product, up to 16 from one. A Merlin blueprint invents either a
+      Hawk or a Harpy; the racial T1 hull is the shared input to both.
+
+    Choosing among paths is a decision for the scan engine, in the same way
+    choosing a decryptor is. Collapsing them here would silently pick one.
     """
 
     t1_blueprint_id: int
