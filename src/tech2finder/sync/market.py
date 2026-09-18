@@ -31,10 +31,13 @@ class SyncSummary:
     fetched: int
     skipped: int
     rows: int
+    #: Types whose fetch failed. Kept rather than raised: one bad type should
+    #: not throw away the rest of a run that spent real error budget.
+    failures: tuple[tuple[int, BaseException], ...] = ()
 
     @property
     def total(self) -> int:
-        return self.fetched + self.skipped
+        return self.fetched + self.skipped + len(self.failures)
 
 
 async def sync_history(
@@ -55,21 +58,39 @@ async def sync_history(
 
     rows = 0
     total = len(wanted)
+    done = skipped
 
     # The client's budget bounds how many of these are actually in flight; they
     # are all launched and it decides.
     async def fetch(type_id: int) -> History:
-        return await client.market_history(region_id, type_id)
-
-    fetched = await asyncio.gather(*(fetch(type_id) for type_id in due))
-    for done, history in enumerate(fetched, start=1):
-        rows += _store_history(conn, history)
-        _record_fetch(conn, f"history:{history.type_id}", now, history.expires)
+        history = await client.market_history(region_id, type_id)
+        # Reported here rather than in the storage loop below, which runs only
+        # after every request has finished — progress that arrives all at once,
+        # at the end, is not progress.
+        nonlocal done
+        done += 1
         if on_progress is not None:
-            on_progress(skipped + done, total)
+            on_progress(done, total)
+        return history
+
+    # return_exceptions, deliberately: without it one failed type discards every
+    # successful fetch in the run, nothing is recorded, and the next invocation
+    # pays the whole error budget again.
+    results = await asyncio.gather(*(fetch(type_id) for type_id in due), return_exceptions=True)
+
+    today = now.date()
+    succeeded = 0
+    failures: list[tuple[int, BaseException]] = []
+    for type_id, result in zip(due, results, strict=True):
+        if isinstance(result, BaseException):
+            failures.append((type_id, result))
+            continue
+        rows += _store_history(conn, result, today)
+        _record_fetch(conn, f"history:{result.type_id}", now, result.expires)
+        succeeded += 1
 
     conn.commit()
-    return SyncSummary(fetched=len(due), skipped=skipped, rows=rows)
+    return SyncSummary(fetched=succeeded, skipped=skipped, rows=rows, failures=tuple(failures))
 
 
 async def sync_prices(conn: sqlite3.Connection, client: EsiClient, now: datetime) -> SyncSummary:
@@ -105,43 +126,51 @@ async def sync_systems(conn: sqlite3.Connection, client: EsiClient, now: datetim
     return SyncSummary(fetched=1, skipped=0, rows=len(result.indices))
 
 
-def _store_history(conn: sqlite3.Connection, history: History) -> int:
+def _store_history(conn: sqlite3.Connection, history: History, today: date) -> int:
     if not history.rows:
         return 0
 
-    settled, trailing = _split_trailing_edge(history.rows)
+    settled, trailing = _split_trailing_edge(history.rows, today)
 
     # A closed day never changes: written once and left alone. If ESI ever
     # contradicts itself about a past date, the stored value wins rather than
     # shifting the Valuation Basis under a ranking already acted on.
-    conn.executemany(
+    written = conn.executemany(
         "INSERT OR IGNORE INTO market_history "
         "(type_id, date, average, highest, lowest, order_count, volume) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [(history.type_id, *_values(row)) for row in settled],
-    )
+    ).rowcount
     # The newest days may still be settling, so they are replaced.
-    conn.executemany(
+    written += conn.executemany(
         "INSERT OR REPLACE INTO market_history "
         "(type_id, date, average, highest, lowest, order_count, volume) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [(history.type_id, *_values(row)) for row in trailing],
-    )
-    return len(history.rows)
+    ).rowcount
+    # Rows actually written, not rows offered: a re-fetch that changed nothing
+    # should not report thousands of rows.
+    return max(0, written)
 
 
 def _split_trailing_edge(
-    rows: Sequence[HistoryRow],
+    rows: Sequence[HistoryRow], today: date
 ) -> tuple[list[HistoryRow], list[HistoryRow]]:
-    """Settled days and still-settling ones, split by **date, not row count**.
+    """Settled days and still-settling ones, split by date relative to **today**.
 
-    History is sparse — ESI emits no row for a day that did not trade — so the
-    last three rows can span months. Splitting by position would treat an old,
-    long-settled day as the trailing edge and rewrite it.
+    Two ways to get this wrong, both tried:
+
+    - By row count. History is sparse, so the last three rows can span months
+      and a long-settled day gets rewritten as though it were the tail.
+    - By the newest *row's* date. For an item that last traded in June, the
+      cutoff lands in June too, and those months-old rows are rewritten forever.
+      That hits illiquid items hardest — exactly the ones whose Valuation Basis
+      is most fragile.
+
+    Settling is a property of the calendar, not of the data.
     """
+    cutoff = today - timedelta(days=TRAILING_EDGE_DAYS - 1)
     ordered = sorted(rows, key=lambda row: row.date)
-    newest = date.fromisoformat(ordered[-1].date)
-    cutoff = newest - timedelta(days=TRAILING_EDGE_DAYS - 1)
 
     settled = [row for row in ordered if date.fromisoformat(row.date) < cutoff]
     trailing = [row for row in ordered if date.fromisoformat(row.date) >= cutoff]

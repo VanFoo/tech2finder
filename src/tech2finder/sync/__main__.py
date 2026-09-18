@@ -103,7 +103,7 @@ def main() -> None:
         print(f"error: {exc}", file=sys.stderr)
         print(
             f"\nSet {USER_AGENT_ENV}, e.g.\n"
-            f'  export {USER_AGENT_ENV}="tech2finder/0.1 (you@example.org)"',
+            f'  export {USER_AGENT_ENV}="tech2finder/0.1 (your.name@your-provider.com)"',
             file=sys.stderr,
         )
         raise SystemExit(2) from None

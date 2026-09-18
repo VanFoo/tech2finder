@@ -8,7 +8,7 @@ import pytest
 
 from tech2finder.sync.budget import ErrorBudget
 from tech2finder.sync.esi import THE_FORGE, EsiClient, UnidentifiedClient
-from tech2finder.sync.transport import Response
+from tech2finder.sync.transport import Response, TransportError
 
 from .fake_transport import FakeTransport
 
@@ -169,3 +169,66 @@ async def test_teaches_the_budget_from_every_response() -> None:
 
     assert c.budget.remaining == 58
     assert c.budget.capacity == 8
+
+
+async def test_retries_a_transport_failure() -> None:
+    # A reset connection or timeout is exactly what a retry is for; over
+    # hundreds of calls one is near certain, and without this the whole run dies.
+    class Flaky(FakeTransport):
+        attempts = 0
+
+        async def get(self, url: str, headers: dict[str, str] | None = None) -> Response:
+            Flaky.attempts += 1
+            if Flaky.attempts == 1:
+                raise TransportError("connection reset")
+            return await super().get(url, headers)
+
+    transport = Flaky(responses=[ok([])])
+
+    await client(transport).market_history(THE_FORGE, 31796)
+
+    assert Flaky.attempts == 2
+
+
+async def test_gives_up_on_a_persistent_transport_failure() -> None:
+    class Dead(FakeTransport):
+        async def get(self, url: str, headers: dict[str, str] | None = None) -> Response:
+            raise TransportError("connection refused")
+
+    with pytest.raises(TransportError):
+        await client(Dead(), retries=1).market_history(THE_FORGE, 31796)
+
+
+async def test_rejects_the_placeholder_the_project_documents() -> None:
+    # README and the CLI both suggest exactly this; the guard exists for it.
+    with pytest.raises(UnidentifiedClient):
+        EsiClient(
+            transport=FakeTransport(),
+            budget=None,  # type: ignore[arg-type]
+            user_agent="tech2finder/0.1 (you@example.org)",
+        )
+
+
+@pytest.mark.parametrize(
+    "user_agent",
+    [
+        "tech2finder/0.1 (todorov@fastmail.com)",  # 'todo' inside a real surname
+        "tech2finder/0.1 (example@realdomain.net)",  # 'example' as a real local part
+    ],
+)
+async def test_accepts_a_real_address_that_merely_looks_like_a_placeholder(
+    user_agent: str,
+) -> None:
+    EsiClient(transport=FakeTransport(), budget=None, user_agent=user_agent)  # type: ignore[arg-type]
+
+
+async def test_a_zoneless_expires_is_not_a_poison_pill() -> None:
+    # parsedate_to_datetime returns naive for '-0000'. Stored naive and later
+    # compared against an aware now, it raises — permanently, for that resource.
+    transport = FakeTransport(responses=[ok([], Expires="Sat, 19 Sep 2026 11:05:00 -0000")])
+
+    result = await client(transport).market_history(THE_FORGE, 31796)
+
+    assert result.expires is not None
+    assert result.expires.tzinfo is not None
+    assert result.expires > datetime(2026, 9, 19, tzinfo=UTC)

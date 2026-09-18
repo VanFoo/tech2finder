@@ -16,15 +16,16 @@ many requests may be in flight.
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlencode
 
 from tech2finder.sync.budget import ErrorBudget
-from tech2finder.sync.transport import Transport
+from tech2finder.sync.transport import Transport, TransportError
 
 BASE = "https://esi.evetech.net/latest"
 
@@ -35,9 +36,26 @@ THE_FORGE = 10000002
 #: not become a 200 by asking again, and retrying it only spends budget.
 RETRYABLE = frozenset({420, 500, 502, 503, 504})
 
-#: Rejected as contact addresses. Shipping a config example means the
-#: placeholder will sometimes be left in it.
-PLACEHOLDERS = ("your-email", "youremail", "example.com", "change-me", "changeme", "todo")
+#: Domains reserved for documentation. Shipping a config example means the
+#: placeholder gets left in it sometimes, and these are what examples use.
+PLACEHOLDER_DOMAINS = ("example.com", "example.org", "example.net", "example.edu")
+
+#: Placeholder local parts, matched whole. Matching loose substrings instead
+#: would reject real addresses — "todo" appears inside plenty of surnames.
+#: Matched against the address itself rather than the whole string, so a real
+#: contact is not rejected for containing a placeholder word by coincidence.
+ADDRESS = re.compile(r"([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+
+PLACEHOLDER_LOCAL_PARTS = (
+    "your-email",
+    "youremail",
+    "your.email",
+    "you",
+    "change-me",
+    "changeme",
+    "todo",
+    "email",
+)
 
 
 class UnidentifiedClient(Exception):
@@ -153,13 +171,21 @@ class EsiClient:
         attempt = 0
 
         while True:
-            async with self.budget.slot():
-                response = await self._transport.get(url, headers=headers)
-
-            # Learned from every response, success included: ESI reports the
-            # budget on a 200, so a scan finds out it is in trouble without
-            # having to fail first.
-            self.budget.observe(response)
+            try:
+                async with self.budget.slot():
+                    response = await self._transport.get(url, headers=headers)
+                    # Recorded inside the slot: releasing first would admit more
+                    # requests against a budget reading already known to be stale.
+                    self.budget.observe(response)
+            except TransportError:
+                # A connection reset or timeout is exactly what a retry is for.
+                # Over hundreds of calls one is near certain.
+                if attempt >= self._retries:
+                    raise
+                await self._sleep(backoff)
+                backoff *= 2
+                attempt += 1
+                continue
 
             if response.status == 200:
                 payload = json.loads(response.body)
@@ -179,15 +205,23 @@ def _optional_float(value: Any) -> float | None:
 
 
 def _reject_unidentified(user_agent: str) -> None:
-    lowered = user_agent.strip().lower()
-    if not lowered:
+    """Refuse to make a request CCP cannot attribute to anyone.
+
+    Failing to start is the better error: running unidentified risks losing API
+    access, and that consequence is not locally visible.
+    """
+    if not user_agent.strip():
         raise UnidentifiedClient("ESI requires a User-Agent naming the app and a contact address")
-    if "@" not in lowered:
+
+    found = ADDRESS.search(user_agent)
+    if found is None:
         raise UnidentifiedClient(
             f"User-Agent {user_agent!r} carries no contact address; CCP asks third-party "
             f"clients to be reachable, and unidentified traffic is what gets blocked"
         )
-    if any(marker in lowered for marker in PLACEHOLDERS):
+
+    local, domain = found.group(1).lower(), found.group(2).lower()
+    if domain in PLACEHOLDER_DOMAINS or local in PLACEHOLDER_LOCAL_PARTS:
         raise UnidentifiedClient(
             f"User-Agent {user_agent!r} still contains a placeholder contact address"
         )
@@ -198,6 +232,10 @@ def _expires(header: str | None) -> datetime | None:
     if header is None:
         return None
     try:
-        return parsedate_to_datetime(header)
+        parsed = parsedate_to_datetime(header)
     except (TypeError, ValueError):
         return None
+    # A '-0000' or zone-less date parses naive. Storing that and later comparing
+    # it against an aware `now` raises, and does so permanently for that
+    # resource once written, so it is normalised here.
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)

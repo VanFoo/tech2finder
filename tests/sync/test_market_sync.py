@@ -262,3 +262,125 @@ async def test_the_trailing_edge_is_measured_in_days_not_rows(store: Path) -> No
     assert by_date["2026-06-01"] == pytest.approx(100.0), "settled months ago"
     assert by_date["2026-07-01"] == pytest.approx(100.0), "also settled"
     assert by_date["2026-09-17"] == pytest.approx(250.0), "the actual trailing edge"
+
+
+async def test_settled_days_of_an_illiquid_item_are_never_rewritten(store: Path) -> None:
+    # Anchoring the trailing edge on the newest *row* puts the cutoff wherever
+    # that item last traded, so a dormant item's months-old rows are rewritten
+    # forever. Settling is a property of the calendar, not of the data — and
+    # this hits illiquid items hardest, whose Valuation Basis is most fragile.
+    dormant = [day("2026-01-10", 100.0), day("2026-05-30", 100.0), day("2026-06-01", 100.0)]
+    with connect(store) as conn:
+        await sync_history(
+            conn,
+            make_client(FakeTransport(responses=[history_response(dormant)])),
+            THE_FORGE,
+            [31796],
+            now=NOW,
+        )
+
+    contradicting = [day("2026-01-10", 999.0), day("2026-05-30", 999.0), day("2026-06-01", 999.0)]
+    with connect(store) as conn:
+        await sync_history(
+            conn,
+            make_client(FakeTransport(responses=[history_response(contradicting)])),
+            THE_FORGE,
+            [31796],
+            now=NOW + timedelta(days=1),
+        )
+
+    with connect(store) as conn:
+        averages = [r[0] for r in conn.execute("SELECT average FROM market_history")]
+
+    assert averages == pytest.approx([100.0, 100.0, 100.0]), "all three settled months ago"
+
+
+async def test_one_failed_type_does_not_discard_the_rest_of_the_run(store: Path) -> None:
+    # Without this, a single 404 throws away every successful fetch, records
+    # nothing, and makes the next run pay the whole error budget again.
+    transport = FakeTransport(
+        responses=[
+            history_response([day("2026-09-17")]),
+            Response(status=404, headers={}, body=b""),
+            history_response([day("2026-09-17")]),
+        ]
+    )
+
+    with connect(store) as conn:
+        summary = await sync_history(conn, make_client(transport), THE_FORGE, [1, 2, 3], now=NOW)
+
+    assert summary.fetched == 2
+    assert len(summary.failures) == 1
+    assert summary.failures[0][0] in (1, 2, 3)
+
+    with connect(store) as conn:
+        stored = {r[0] for r in conn.execute("SELECT DISTINCT type_id FROM market_history")}
+    assert len(stored) == 2, "the successful fetches were kept"
+
+
+async def test_a_failed_type_is_retried_next_run_while_the_others_are_not(store: Path) -> None:
+    transport = FakeTransport(
+        responses=[
+            history_response([day("2026-09-17")], NOW + timedelta(hours=6)),
+            Response(status=404, headers={}, body=b""),
+        ]
+    )
+    with connect(store) as conn:
+        await sync_history(conn, make_client(transport), THE_FORGE, [1, 2], now=NOW)
+
+    again = FakeTransport(responses=[history_response([day("2026-09-17")])])
+    with connect(store) as conn:
+        summary = await sync_history(conn, make_client(again), THE_FORGE, [1, 2], now=NOW)
+
+    assert summary.fetched == 1, "only the one that failed"
+    assert summary.skipped == 1, "the one that succeeded is inside its Expires floor"
+
+
+async def test_reports_rows_written_not_rows_offered(store: Path) -> None:
+    rows = [day("2026-06-01"), day("2026-06-02")]
+    with connect(store) as conn:
+        first = await sync_history(
+            conn,
+            make_client(FakeTransport(responses=[history_response(rows)])),
+            THE_FORGE,
+            [31796],
+            now=NOW,
+        )
+
+    with connect(store) as conn:
+        second = await sync_history(
+            conn,
+            make_client(FakeTransport(responses=[history_response(rows)])),
+            THE_FORGE,
+            [31796],
+            now=NOW + timedelta(days=1),
+        )
+
+    assert first.rows == 2
+    assert second.rows == 0, "a re-fetch that changed nothing wrote nothing"
+
+
+async def test_progress_is_reported_while_fetching_not_after(store: Path) -> None:
+    seen: list[int] = []
+
+    class Watching(FakeTransport):
+        async def get(self, url: str, headers: dict[str, str] | None = None) -> Response:
+            # Progress reported so far, observed from inside a request.
+            seen.append(len(reported))
+            return await super().get(url, headers)
+
+    reported: list[tuple[int, int]] = []
+    transport = Watching(responses=[history_response([day("2026-09-17")]) for _ in range(4)])
+
+    with connect(store) as conn:
+        await sync_history(
+            conn,
+            make_client(transport),
+            THE_FORGE,
+            [1, 2, 3, 4],
+            now=NOW,
+            on_progress=lambda done, total: reported.append((done, total)),
+        )
+
+    assert reported[-1] == (4, 4)
+    assert max(seen) > 0, "progress should arrive during the fetch, not only after it"

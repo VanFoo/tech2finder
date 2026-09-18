@@ -26,6 +26,14 @@ class Response:
         return None
 
 
+class TransportError(OSError):
+    """A request did not complete: connection refused, reset, timed out.
+
+    Defined here rather than leaking httpx's exception hierarchy, so callers can
+    retry transport failures without importing the HTTP library.
+    """
+
+
 class Transport(Protocol):
     async def get(self, url: str, headers: dict[str, str] | None = None) -> Response: ...
 
@@ -38,7 +46,12 @@ class HttpxTransport:
         self._client = client
 
     async def get(self, url: str, headers: dict[str, str] | None = None) -> Response:
-        response = await self._client.get(url, headers=headers)
+        try:
+            response = await self._client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            # Translated at the seam so the layer above can retry a network blip
+            # without knowing which HTTP library produced it.
+            raise TransportError(f"GET {url} failed: {exc}") from exc
         return Response(
             status=response.status_code,
             headers=dict(response.headers),

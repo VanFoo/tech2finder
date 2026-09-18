@@ -151,3 +151,71 @@ async def test_a_slot_is_released_even_when_the_work_raises() -> None:
             raise RuntimeError("boom")
 
     assert b.in_flight == 0
+
+
+async def test_the_halt_is_not_bypassed_when_esi_omits_the_reset_header() -> None:
+    # ESI saying "zero errors left" with no reset time must not be read as
+    # "reset was in the past, carry on": that turns the halt into a no-op and
+    # resumes at full capacity against an exhausted budget.
+    b, clock = budget()
+    b.observe(Response(status=420, headers={"X-ESI-Error-Limit-Remain": "0"}, body=b""))
+
+    assert b.capacity == 0
+    async with b.slot():
+        pass
+
+    assert clock.slept == [pytest.approx(60.0)], "should wait a full window, not zero seconds"
+
+
+async def test_an_initial_low_budget_is_respected_rather_than_refilled_instantly() -> None:
+    b, clock = budget(remaining=FLOOR)
+
+    assert b.capacity == 0
+    async with b.slot():
+        pass
+
+    assert sum(clock.slept) > 0
+
+
+async def test_a_spent_reset_deadline_is_not_reused_by_a_later_halt() -> None:
+    b, clock = budget()
+    b.observe(Response(status=420, headers=headers(remaining=0, reset=10), body=b""))
+    async with b.slot():
+        pass
+    assert sum(clock.slept) == pytest.approx(10.0)
+
+    # A second exhaustion, this time with no reset header: the old deadline is
+    # now in the past and must not be mistaken for "already reset".
+    b.observe(Response(status=420, headers={"X-ESI-Error-Limit-Remain": "0"}, body=b""))
+    async with b.slot():
+        pass
+
+    assert sum(clock.slept) == pytest.approx(70.0)
+
+
+async def test_concurrency_recovers_after_the_budget_dips_and_returns() -> None:
+    # A single notification per release can only lower the in-flight level: the
+    # woken task takes the slot straight back, and everyone else stays asleep
+    # even once capacity has grown again.
+    b, _ = budget()
+    peak_after_recovery = 0
+    in_flight = 0
+    done = 0
+
+    async def one(index: int) -> None:
+        nonlocal peak_after_recovery, in_flight, done
+        async with b.slot():
+            in_flight += 1
+            if index == 0:
+                b.observe(Response(status=200, headers=headers(remaining=55), body=b""))
+            if index == 40:
+                b.observe(Response(status=200, headers=headers(remaining=100), body=b""))
+            if done > 60:
+                peak_after_recovery = max(peak_after_recovery, in_flight)
+            await asyncio.sleep(0)
+            in_flight -= 1
+            done += 1
+
+    await asyncio.gather(*(one(i) for i in range(160)))
+
+    assert peak_after_recovery == CEILING, "capacity recovered but concurrency did not"

@@ -65,12 +65,13 @@ stays hermetic. Run the import to enable them.
 ### Market data
 
 ```bash
-export TECH2FINDER_USER_AGENT="tech2finder/0.1 (you@example.org)"
+export TECH2FINDER_USER_AGENT="tech2finder/0.1 (your.name@your-provider.com)"
 uv run python -m tech2finder.sync --market-group 965
 ```
 
 ESI requires a User-Agent naming the app and a contact address; the client
-refuses to start without one, because running unidentified risks losing API
+refuses to start without a real one — documentation domains and placeholder
+local parts are rejected — because running unidentified risks losing API
 access and that is not locally visible. Your address stays in your environment —
 it is not committed.
 
