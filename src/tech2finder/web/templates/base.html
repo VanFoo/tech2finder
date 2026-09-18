@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}tech2finder{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.3"></script>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; max-width: 60rem; padding: 2rem 1rem; }
+      code { font-family: ui-monospace, monospace; }
+      .muted { opacity: 0.7; }
+    </style>
+  </head>
+  <body>
+    <h1>tech2finder</h1>
+    {% block content %}{% endblock %}
+  </body>
+</html>

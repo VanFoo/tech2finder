@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <p class="muted">Rank invention-reachable Tech&nbsp;2 items by ISK per Day.</p>
+
+  <h2>Store</h2>
+  <p><code>{{ status.store_path }}</code></p>
+
+  <h3>Migrations applied</h3>
+  <ul>
+    {% for name in status.applied_migrations %}
+      <li><code>{{ name }}</code></li>
+    {% else %}
+      <li class="muted">none</li>
+    {% endfor %}
+  </ul>
+
+  <h3>Static data</h3>
+  {% if status.has_sde %}
+    <p>SDE imported, fingerprint <code>{{ status.sde_md5 }}</code>.</p>
+  {% else %}
+    <p class="muted">No SDE imported yet.</p>
+  {% endif %}
+{% endblock %}

@@ -1,25 +1,35 @@
 {
-  "name": "AgentPlayground",
+  "name": "tech2finder",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:latest",
   "features": {
     "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.13"
+    }
   },
-  "forwardPorts": [5173],
+  "postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && ~/.local/bin/uv sync --extra dev",
+  "remoteEnv": {
+    "PATH": "${containerEnv:HOME}/.local/bin:${containerEnv:PATH}"
+  },
+  "forwardPorts": [8000],
   "portsAttributes": {
-    "5173": {
-      "label": "Vite dev server",
+    "8000": {
+      "label": "tech2finder",
       "onAutoForward": "openPreview"
     }
   },
   "customizations": {
     "vscode": {
       "extensions": [
-        "github.github-vscode-theme"
+        "github.github-vscode-theme",
+        "ms-python.python",
+        "charliermarsh.ruff"
       ],
       "settings": {
         "workbench.colorTheme": "GitHub Dark",
-        "workbench.preferredLanguage": "en"
+        "workbench.preferredLanguage": "en",
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
       }
     }
   }
