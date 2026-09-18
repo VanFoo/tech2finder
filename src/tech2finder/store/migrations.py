@@ -14,7 +14,7 @@ MIGRATIONS = Path(__file__).parent / "migrations"
 
 #: A migration's stem. Restricting it keeps the name safe to inline into SQL
 #: below, where a bound parameter is not available inside ``executescript``.
-NAME = re.compile(r"^[0-9]{4}_[a-z0-9_]+$")
+NAME = re.compile(r"\A[0-9]{4}_[a-z0-9_]+\Z")
 
 _BOOKKEEPING = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -25,7 +25,16 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 
 def apply_migrations(conn: sqlite3.Connection, directory: Path = MIGRATIONS) -> list[str]:
-    """Apply every migration in ``directory`` not yet recorded. Returns those applied."""
+    """Apply every migration in ``directory`` not yet recorded. Returns those applied.
+
+    Not safe to call concurrently: apply migrations once at startup rather than
+    from a request handler.
+    """
+    if not directory.is_dir():
+        # Returning an empty list would be indistinguishable from "already up to
+        # date", and the real failure would surface later as a missing table.
+        raise FileNotFoundError(f"migrations directory not found: {directory}")
+
     conn.execute(_BOOKKEEPING)
     conn.commit()
 
@@ -45,11 +54,13 @@ def apply_migrations(conn: sqlite3.Connection, directory: Path = MIGRATIONS) -> 
 
         # executescript cannot take bound parameters and implicitly commits any
         # open transaction, so the transaction is opened inside the script. The
-        # name is safe to inline because NAME has just constrained it.
+        # name is safe to inline because NAME has just constrained it. The
+        # explicit ';' guards against a file whose last statement omits one,
+        # which would otherwise glue onto the INSERT below.
         try:
             conn.executescript(
                 "BEGIN;\n"
-                f"{migration.read_text()}\n"
+                f"{migration.read_text()}\n;\n"
                 f"INSERT INTO schema_migrations (name) VALUES ('{name}');\n"
                 "COMMIT;"
             )

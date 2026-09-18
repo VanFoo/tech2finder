@@ -90,3 +90,26 @@ def test_rejects_a_migration_whose_name_does_not_follow_the_convention(
 
     with pytest.raises(ValueError, match="NNNN_description"):
         apply_migrations(conn, d)
+
+
+def test_applies_a_migration_whose_last_statement_omits_its_semicolon(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    # The runner appends its own bookkeeping INSERT to the file's text. Without a
+    # separator the two glue into one malformed statement, and the error points
+    # at the runner rather than at the author's file.
+    d = tmp_path / "unterminated"
+    d.mkdir()
+    (d / "0001_widgets.sql").write_text("CREATE TABLE widgets (id INTEGER PRIMARY KEY)")
+
+    assert apply_migrations(conn, d) == ["0001_widgets"]
+    assert "widgets" in table_names(conn)
+
+
+def test_raises_when_the_migrations_directory_is_missing(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    # Reporting "nothing to do" would be indistinguishable from "already up to
+    # date", and the real failure would surface later as a missing table.
+    with pytest.raises(FileNotFoundError):
+        apply_migrations(conn, tmp_path / "does-not-exist")

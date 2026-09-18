@@ -12,7 +12,14 @@ from pathlib import Path
 
 @contextmanager
 def connect(path: Path) -> Iterator[sqlite3.Connection]:
-    """Open the store at ``path``, creating it and its parents if absent."""
+    """Open the store at ``path``, creating it and its parents if absent.
+
+    Commits on a clean exit and rolls back on an exception, matching what
+    ``sqlite3.connect`` does when used as a context manager directly. Without
+    that, a caller who writes and returns normally loses the write silently:
+    ``close()`` discards an open transaction, and DML — unlike DDL — is inside
+    one under Python's default isolation level.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     try:
@@ -22,5 +29,10 @@ def connect(path: Path) -> Iterator[sqlite3.Connection]:
         # import would block the UI.
         connection.execute("PRAGMA journal_mode = WAL")
         yield connection
+    except BaseException:
+        connection.rollback()
+        raise
+    else:
+        connection.commit()
     finally:
         connection.close()

@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from tech2finder.store.connection import connect
 
 
@@ -35,3 +37,29 @@ def test_closes_the_connection_on_exit(tmp_path: Path) -> None:
     except sqlite3.ProgrammingError:
         return
     raise AssertionError("connection should be closed after the context manager exits")
+
+
+def test_commits_writes_when_the_block_exits_cleanly(tmp_path: Path) -> None:
+    # sqlite3.connect used directly as a context manager commits on clean exit,
+    # so a connect() that did not would silently lose writes for any caller
+    # copying that habit.
+    path = tmp_path / "store.db"
+    with connect(path) as conn:
+        conn.execute("CREATE TABLE t (x INTEGER)")
+        conn.execute("INSERT INTO t VALUES (1)")
+
+    with connect(path) as conn:
+        assert [row[0] for row in conn.execute("SELECT x FROM t")] == [1]
+
+
+def test_rolls_back_writes_when_the_block_raises(tmp_path: Path) -> None:
+    path = tmp_path / "store.db"
+    with connect(path) as conn:
+        conn.execute("CREATE TABLE t (x INTEGER)")
+
+    with pytest.raises(RuntimeError), connect(path) as conn:
+        conn.execute("INSERT INTO t VALUES (1)")
+        raise RuntimeError("boom")
+
+    with connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM t").fetchone()[0] == 0

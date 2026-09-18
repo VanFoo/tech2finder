@@ -3,13 +3,15 @@
 The view builds one of these and the template renders it. Nothing here is
 computed in a template, which is the constraint ADR-0012 imposes so that
 swapping the frontend later stays cheap.
+
+Reads only. Bringing the schema up to date is a startup concern — see
+``tech2finder.store.bootstrap``.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
 
 from tech2finder.store.connection import connect
-from tech2finder.store.migrations import apply_migrations
 
 #: Key under which the SDE import records the dump's md5sum. Fuzzwork publishes
 #: a checksum alongside the dump, so a later import can ask "has the SDE
@@ -20,7 +22,10 @@ SDE_MD5 = "sde_md5"
 @dataclass(frozen=True)
 class StoreStatus:
     store_path: Path
-    applied_migrations: list[str]
+    #: A tuple, not a list: a frozen dataclass synthesises __hash__ from its
+    #: fields, and a list field would make the value both unhashable and
+    #: quietly mutable.
+    applied_migrations: tuple[str, ...]
     sde_md5: str | None
 
     @property
@@ -30,8 +35,9 @@ class StoreStatus:
 
 def store_status(store_path: Path) -> StoreStatus:
     with connect(store_path) as conn:
-        apply_migrations(conn)
-        names = [row[0] for row in conn.execute("SELECT name FROM schema_migrations ORDER BY name")]
+        names = tuple(
+            row[0] for row in conn.execute("SELECT name FROM schema_migrations ORDER BY name")
+        )
         row = conn.execute("SELECT value FROM meta WHERE key = ?", (SDE_MD5,)).fetchone()
 
     return StoreStatus(
