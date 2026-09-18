@@ -12,11 +12,11 @@ Nothing is committed — everything below is untracked or modified in the workin
 
 | What | Where | Status |
 |---|---|---|
-| Glossary / domain language | `CONTEXT.md` | untracked |
-| Architecture decisions (13) | `docs/adr/0001`–`0013` | untracked |
-| EVE industry formulas | `docs/research/industry-formulas.md` | untracked |
+| Glossary / domain language | `CONTEXT.md` | committed |
+| Architecture decisions (14) | `docs/adr/0001`–`0014` | committed |
+| EVE industry formulas | `docs/research/industry-formulas.md` | committed |
 | Agent conventions | `docs/agents/` | committed |
-| This handover | `docs/planning/HANDOVER.md` | untracked |
+| This handover | `docs/planning/HANDOVER.md` | committed |
 
 `README.md` has an uncommitted edit adding a note about eve-industry.org — the unmaintained site that does
 part of this job one blueprint at a time. Scanning and ranking a whole category is the gap this tool fills.
@@ -40,7 +40,7 @@ to still hold:
 
 ## The shape of the thing, in one paragraph
 
-A local web app (Python + HTMX + SQLite) that scans one or more market-group branches of invention-reachable
+A local web app (FastAPI + Jinja2 + HTMX + SQLite) that scans one or more market-group branches of invention-reachable
 T2 items, ranks them by achievable **ISK per day**, and shows a cost breakdown on drill-down. Personal,
 single-user, no ESI authentication — skills are typed in, not fetched. Everything is priced from a median of
 daily market history at Jita; no spread is modelled. Starting category: **Rigs**.
@@ -60,6 +60,15 @@ config file (ADR-0013) with the noted defaults.
 | Error-budget safety floor | 50 of 100 | ADR-0011 |
 | SCC surcharge | 4% (volatile — see G10) | ADR-0013 |
 | Facility tax (NPC station) | 0.25% | research §5.4 |
+
+Two implementation facts settled 2026-09-18, both verified live:
+
+- **SDE download**: `https://www.fuzzwork.co.uk/dump/latest-sqlite.db.gz` is a stable URL (136 MB), with a companion
+  `.md5sum` that makes "has the SDE changed?" answerable without re-downloading. The timestamped files under
+  `dump/latest/` are *not* stable — do not build a URL from them.
+- **ESI User-Agent**: must identify the app and carry a contact address. App string along the lines of
+  `xrayape tech2 finder`. The contact address is supplied from **local config only** — this is a public repo,
+  so it is deliberately not committed or written into an issue.
 
 Undecided values are genuinely open and should be picked deliberately, not guessed at.
 
