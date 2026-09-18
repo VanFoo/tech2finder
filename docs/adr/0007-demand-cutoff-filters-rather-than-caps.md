@@ -10,4 +10,6 @@ The relative test alone has a hole — 20% of nearly nothing is still nothing �
 
 The history threshold defaults to the **full valuation window**, so an item must have traded on all 15 days to be ranked. Consequence: the "short window" flag is dormant at the default and only becomes meaningful if the threshold is lowered. Consequence worth watching: if ESI history returns rows only for days that actually traded — to be verified — then this threshold doubles as a sporadicity filter, catching the item that averages well because it sold once in bulk and nothing since.
 
+Measured after the fact: ESI market history returns **no row at all** for a day with no trades, never a zero-volume one. So the minimum-days threshold is a **liquidity filter**, not a data-sufficiency check — at its default of 15, the full valuation window, an item must have traded on every one of the last 15 days. That is stricter than it sounds, and it subsumes for free the sporadicity filter considered and deferred during design.
+
 Because three independent filters can drop an item, the UI shows an **"excluded, and why" list** next to the ranking. A silent exclusion is indistinguishable from an unprofitable item, and a threshold the user cannot see firing cannot be tuned.

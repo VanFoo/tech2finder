@@ -659,6 +659,34 @@ in the real-dump tests so that a change surfaces loudly rather than silently ske
 
 ---
 
+## ESI market history omits days with no trades
+
+Measured against the live API (2026-09-18, The Forge / Jita):
+
+| type | rows | span | missing days | zero-volume rows |
+|---|---|---|---|---|
+| Medium Core Defense Field Extender II | 413 | 413 d | 0 | 0 |
+| XL Torpedo Launcher II | 407 | 412 d | 5 | 0 |
+| XL Cruise Missile Launcher II | 352 | 412 d | 60 | 0 |
+| Ymir | 2 | 15 d | 13 | 0 |
+
+**A day with no trades produces no row at all** — never a row with `volume: 0`. Across four items
+spanning 0 to 60 missing days, not one zero-volume row appeared.
+
+Consequences for the tool:
+
+- The **minimum-days Demand Cutoff is a liquidity filter, not a data-sufficiency check.** At its
+  default of 15 (the full valuation window) an item must have traded on *every one of the last 15
+  days* to be ranked. That is considerably stricter than "has 15 days of history", and it silently
+  subsumes the sporadicity filter that was considered and deferred during design.
+- **Row count is a usable liquidity signal in its own right**: days-traded-out-of-window needs no
+  extra request, because it is just the number of rows returned.
+- The series **lags by one to two days** — the newest row observed was yesterday or the day before,
+  never today. So "how many days behind is the newest row" must tolerate a lag of at least two
+  before treating data as stale.
+
+---
+
 ## Gaps and uncertainties
 
 Things I could **not** confirm, or where sources disagree. None of these are papered over above.
