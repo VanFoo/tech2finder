@@ -30,11 +30,17 @@ for what is being worked on.
 
 ## Development
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). The devcontainer
-installs both.
+```bash
+./scripts/setup.sh           # one-time: install uv, sync dependencies, verify
+```
+
+The devcontainer runs this on create. Run it by hand if you are not using the
+devcontainer, or if the container predates it — it is safe to re-run. uv manages
+the Python interpreter as well as the virtualenv, so no system Python setup is
+needed.
 
 ```bash
-uv sync --extra dev          # create .venv and install
+uv sync --extra dev          # refresh dependencies
 uv run pytest                # tests
 uv run ruff check .          # lint
 uv run ruff format .         # format
