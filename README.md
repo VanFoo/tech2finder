@@ -62,6 +62,22 @@ store, which is ~25 MB against a 475 MB dump.
 Tests against the real dump are skipped unless one is present, so the suite
 stays hermetic. Run the import to enable them.
 
+### Market data
+
+```bash
+export TECH2FINDER_USER_AGENT="tech2finder/0.1 (you@example.org)"
+uv run python -m tech2finder.sync --market-group 965
+```
+
+ESI requires a User-Agent naming the app and a contact address; the client
+refuses to start without one, because running unidentified risks losing API
+access and that is not locally visible. Your address stays in your environment —
+it is not committed.
+
+Running this *is* the refresh: nothing is fetched before ESI's `Expires` floor
+permits it, and nothing refreshes on a schedule. A re-run soon after does
+nothing but check.
+
 ### Layout
 
 ```
@@ -71,6 +87,7 @@ src/tech2finder/
   sde/      downloading and importing the EVE Static Data Export
   store/    SQLite connection handling and forward-only migrations
   sync/     everything that talks to ESI — seam 2, over an injectable Transport
+            (budget.py governs concurrency from the live error budget)
   web/      FastAPI views and Jinja2 templates
 ```
 
