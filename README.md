@@ -48,12 +48,27 @@ uv run mypy                  # typecheck (strict)
 uv run python -m tech2finder # dev server on http://127.0.0.1:8000
 ```
 
+### Static data
+
+```bash
+uv run python -m tech2finder.sde   # download and import the EVE SDE
+```
+
+Safe to re-run: the published md5sum is checked first, so an unchanged SDE
+costs one small request rather than a 136 MB download. The dump is cached under
+`data/` (gitignored); only the subset this project reads is copied into the
+store, which is ~25 MB against a 475 MB dump.
+
+Tests against the real dump are skipped unless one is present, so the suite
+stays hermetic. Run the import to enable them.
+
 ### Layout
 
 ```
 src/tech2finder/
   domain/   plain dataclasses that cross the boundary out of the domain
   scan/     the scan engine — seam 1, the primary test seam
+  sde/      downloading and importing the EVE Static Data Export
   store/    SQLite connection handling and forward-only migrations
   sync/     everything that talks to ESI — seam 2, over an injectable Transport
   web/      FastAPI views and Jinja2 templates

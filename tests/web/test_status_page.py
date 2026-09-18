@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from tech2finder.store.bootstrap import bootstrap
 from tech2finder.store.connection import connect
+from tech2finder.store.migrations import MIGRATIONS
 from tech2finder.web.app import create_app
 from tech2finder.web.status import store_status
 
@@ -49,14 +50,17 @@ def test_starting_the_app_migrates_the_store(tmp_path: Path) -> None:
     with TestClient(create_app(store_path=path)):
         pass
 
-    assert store_status(path).applied_migrations == ("0001_meta",)
+    # Compared against the files on disk rather than a hardcoded list, so
+    # adding a migration does not mean editing this test.
+    expected = tuple(sorted(p.stem for p in MIGRATIONS.glob("*.sql")))
+    assert store_status(path).applied_migrations == expected
 
 
 def test_the_view_hands_the_template_a_plain_dataclass(store: Path) -> None:
     status = store_status(store)
 
     assert is_dataclass(status)
-    assert status.applied_migrations == ("0001_meta",)
+    assert status.applied_migrations == tuple(sorted(p.stem for p in MIGRATIONS.glob("*.sql")))
     assert status.store_path.name == "store.db"
 
 
