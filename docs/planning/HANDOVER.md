@@ -1,12 +1,39 @@
 # tech2finder — session handover
 
-Written 2026-09-18, at the end of the design phase. Read this first when picking the project back up.
+Written 2026-09-18. Read this first when picking the project back up.
 
 ## Where the project stands
 
-**Design is complete. No code has been written.** A 39-decision grilling interview closed with an empty
-frontier, the decisions were distilled into 13 ADRs, and the industry maths was researched and written up.
-Nothing is committed — everything below is untracked or modified in the working tree.
+Design complete and three tickets built. A 39-decision grilling interview closed with an empty frontier,
+the decisions became 14 ADRs, the industry maths was researched against primary sources, and the spec was
+split into ten GitHub issues with live dependencies.
+
+**Built so far — #2, #3, #5, all on `main` and pushed:**
+
+- **Scaffold** — FastAPI + Jinja2 over SQLite, forward-only migrations, and both test seams in place.
+- **SDE import** — downloads Fuzzwork's dump, imports the subset used (769k rows, 25 MB from a 475 MB
+  dump), exposes it as dataclasses. Re-running takes 1.8s when unchanged.
+- **ESI sync** — three endpoints, the `Expires` floor, and the error budget governing concurrency.
+
+**127 tests, ruff clean, mypy strict clean.** Everything is committed and pushed; the working tree is clean.
+
+### What is actually runnable
+
+```bash
+./scripts/setup.sh                                  # environment, idempotent
+uv run python -m tech2finder.sde                    # download + import the SDE
+export TECH2FINDER_USER_AGENT="tech2finder/0.1 (you@yourdomain.com)"
+uv run python -m tech2finder.sync --market-group 965   # fetch market data
+uv run python -m tech2finder                        # status page on :8000
+```
+
+`data/` is gitignored and holds the SDE dump and the store. Deleting it costs one re-import.
+
+### Frontier
+
+**#4 (config and Production Profile)** and **#6 (Valuation Basis)** are both ready and independent.
+#6 is the smaller and more natural next step: the data it needs is already in the store, and it is
+median + IQR over a 15-day window, with the row count doubling as the liquidity signal.
 
 ## Where things live
 
@@ -14,12 +41,12 @@ Nothing is committed — everything below is untracked or modified in the workin
 |---|---|---|
 | Glossary / domain language | `CONTEXT.md` | committed |
 | Architecture decisions (14) | `docs/adr/0001`–`0014` | committed |
+| Code | `src/tech2finder/`, `tests/` | committed |
 | EVE industry formulas | `docs/research/industry-formulas.md` | committed |
 | Agent conventions | `docs/agents/` | committed |
 | This handover | `docs/planning/HANDOVER.md` | committed |
 
-`README.md` has an uncommitted edit adding a note about eve-industry.org — the unmaintained site that does
-part of this job one blueprint at a time. Scanning and ranking a whole category is the gap this tool fills.
+| Spec and tickets | GitHub issues #1–#10 | #2, #3, #5 closed |
 
 The grilling progress file (`docs/planning/grilling-progress.md`) was deleted once its content reached
 the ADRs. If the reasoning behind a decision is not in an ADR, it is gone — so add to the ADR rather than
@@ -114,23 +141,40 @@ Static data comes from Fuzzwork's prebuilt SQLite SDE dump.
 
 ## Open work, in rough priority order
 
-1. **Validate the load-bearing formula gaps against real in-game jobs.** Four matter (full list under
-   "Gaps and uncertainties" in the research file):
+1. **#6 — Valuation Basis.** Median of daily `average` over a configurable 15-day window, plus IQR as a
+   volatility indicator. Data is already in `market_history`.
+2. **#4 — Config and Production Profile.** TOML; every value is already decided (see the table above).
+3. **#7 — Cost model**, then **#8 — Scan engine**, then **#9 — Web layer**.
+4. **#10 — Validate the four load-bearing formula gaps against real in-game jobs.** This one needs the
+   user at the keyboard in game, recording real jobs at low run counts, and cannot be done from sources:
    - **G1/G2** — the modern facility term in the material formula is undocumented; the `round(x, 2)` step
      rests on a single 2016 source. High confidence on shape, medium on that step.
-   - **G9** — sources actively disagree on whether the invention job fee scales with runs. CCP says no run
-     term; the 2016 PDF says there is one.
-   - **G10** — tax rates have changed four times since 2023. Treat as configuration and re-check.
+   - **G9** — sources disagree on whether the invention job fee scales with runs.
+   - **G10** — tax rates have changed four times since 2023. Configuration, and worth re-checking.
    - **G3** — the wormhole security multiplier is unconfirmed (community assumes the nullsec 2.1).
-2. ~~Decide the three undecided config defaults.~~ **Done 2026-09-18** — all three settled and recorded in their ADRs.
-3. **Verify one ESI fact that changes a filter's meaning**: does `/markets/{region_id}/history/` return rows only for days that traded, or also zero-volume days? If the former, ADR-0007's minimum-days threshold doubles as a sporadicity filter; if the latter, it is purely a data-sufficiency check.
-4. **Read per-blueprint values from the SDE rather than hardcoding category defaults** — invention run
-   counts especially (research G6), and the Standup rig attribute set (G13).
-5. **Start implementation.** ADR-0012 constrains the shape: cost model and scan-result layer return plain
-   dataclasses, templates only render them — no domain arithmetic in a template, no ORM objects in the view.
-   That seam is what keeps an SPA swap cheap later.
 
-## Nothing is committed
+## Things learned while building, that are easy to get wrong again
 
-`git status` at handover: `README.md` modified; `CONTEXT.md`, `docs/adr/`, `docs/planning/`, `docs/research/`
-untracked. Committing this design work is a reasonable first act of the next session.
+- **ESI history omits untraded days entirely** — no row, never `volume: 0`. So the minimum-days cutoff is
+  a *liquidity* filter, not a data-sufficiency check, and the row count is a free liquidity signal.
+  The series also lags one to two days behind today.
+- **Invention is many-to-many in both directions.** 48 products have several sources that *disagree* on
+  probability and runs; 74 sources invent several products, and the player picks which. But probability
+  and run count never vary by product within a source, so the whole invention leg belongs to the source
+  and can be computed once and reused. Asserted in the real-dump tests, since it is observed rather than
+  documented by CCP.
+- **The error budget is where a bug costs API access.** Two shipped in the first pass: the halt was a
+  no-op when ESI omitted the `Reset` header, and concurrency could fall but never recover. Both are
+  pinned by regression tests now. Treat `budget.py` as code to change carefully.
+- **Settling is a property of the calendar, not the data.** The trailing edge of history must be anchored
+  on today, not on the newest row — otherwise a dormant item's months-old rows are rewritten forever.
+
+## Working practice that has held up
+
+Each ticket: TDD at the agreed seams, then `/code-review`, then fix what it finds, reproducing each
+finding before fixing and re-verifying after. The review has caught a real defect every single time,
+including two that would have cost API access. Do not skip it.
+
+## Everything is committed
+
+`main` is clean and pushed. There is nothing outstanding in the working tree.
