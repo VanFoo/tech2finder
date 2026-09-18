@@ -636,6 +636,29 @@ Two further facts worth carrying into the tool:
 
 ---
 
+## Invention is many-to-many, and the invention leg belongs to the source
+
+Measured against the full SDE (2026-09-18), not inferred:
+
+- **Several sources per product.** 48 products are invented from more than one source blueprint,
+  and every one of those differs in probability and run count — T3 subsystems from intact,
+  malfunctioning and wrecked relics at 0.26/20, 0.21/10 and 0.14/3.
+- **Several products per source.** 74 of 1113 source blueprints invent more than one product, up
+  to 16 from one. A Merlin blueprint invents either a Hawk or a Harpy, and **the player chooses
+  which** at invention time.
+- **Probability and run count never vary by product within a source.** Across all 74 multi-product
+  sources: zero exceptions, for both.
+
+The third point is the useful one. It means the entire invention leg — odds, BPC runs, and the
+datacores consumed — is a property of the **source blueprint**, so expected blueprint cost per run
+is identical for every sibling product. Two items invented from the same hull differ only
+downstream: in their bill of materials and what the market pays for them.
+
+⚠️ This is an observed property of the current SDE, not a documented CCP guarantee. It is asserted
+in the real-dump tests so that a change surfaces loudly rather than silently skewing results.
+
+---
+
 ## Gaps and uncertainties
 
 Things I could **not** confirm, or where sources disagree. None of these are papered over above.

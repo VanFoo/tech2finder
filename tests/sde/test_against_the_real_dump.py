@@ -169,3 +169,39 @@ def test_one_source_blueprint_can_invent_several_different_products(store: Path)
     # T2 item costs to build and what the market pays for it.
     assert sorted(p.base_probability for p in from_merlin.values()) == pytest.approx([0.3, 0.3])
     assert {p.runs_per_bpc for p in from_merlin.values()} == {1}
+
+
+def test_probability_and_run_count_are_properties_of_the_source_not_the_product(
+    store: Path,
+) -> None:
+    # Across all 74 source blueprints that invent more than one product, neither
+    # probability nor run count varies by which product is chosen. So the whole
+    # invention leg — odds, runs, datacores — is a property of the source, and
+    # sibling products differ only downstream, in their bill of materials and
+    # what the market pays.
+    #
+    # This is an observed property of the SDE, not a documented CCP guarantee,
+    # which is exactly why it is asserted here: anything built on it should
+    # break loudly if CCP changes it.
+    with connect(store) as conn:
+        varying = conn.execute(
+            """
+            SELECT count(*) FROM (
+                SELECT blueprint_id FROM sde_invention_probability
+                GROUP BY blueprint_id
+                HAVING count(*) > 1 AND count(DISTINCT probability) > 1
+            )
+            """
+        ).fetchone()[0]
+        varying_runs = conn.execute(
+            """
+            SELECT count(*) FROM (
+                SELECT blueprint_id FROM sde_activity_product WHERE activity_id = 8
+                GROUP BY blueprint_id
+                HAVING count(*) > 1 AND count(DISTINCT quantity) > 1
+            )
+            """
+        ).fetchone()[0]
+
+    assert varying == 0, "probability is expected to be a property of the source blueprint"
+    assert varying_runs == 0, "run count is expected to be a property of the source blueprint"
